@@ -1,0 +1,217 @@
+1. Import Libraries and Set Constants
+This section imports the necessary libraries and sets constants for the image size, channels, batch size, buffer size, validation split, embedding dimension, and the number of epochs.
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from tensorflow.keras import layers, models, datasets, callbacks
+import tensorflow.keras.backend as K
+
+IMAGE_SIZE = 32
+CHANNELS = 1
+BATCH_SIZE = 100
+BUFFER_SIZE = 1000
+VALIDATION_SPLIT = 0.2
+EMBEDDING_DIM = 2
+EPOCHS = 3
+
+
+2. Load and Preprocess the Data
+This section loads the Fashion MNIST dataset and defines two helper functions  display for visualizing images and preprocess for normalizing and reshaping the images. It also calls these functions to preprocess the training and test datasets.
+
+
+# Load the data
+(x_train, y_train), (x_test, y_test) = datasets.fashion_mnist.load_data()
+
+# Preprocess the data
+def display(images, n=10, size=(20, 3), cmap="gray_r", as_type="float32", save_to=None):
+    if images.max() > 1.0:
+        images = images / 255.0
+    elif images.min() < 0.0:
+        images = (images + 1.0) / 2.0
+
+    plt.figure(figsize=size)
+    for i in range(n):
+        _ = plt.subplot(1, n, i + 1)
+        plt.imshow(images[i].astype(as_type), cmap=cmap)
+        plt.axis("off")
+
+    if save_to:
+        plt.savefig(save_to)
+        print(f"\nSaved to {save_to}")
+
+    plt.show()
+
+def preprocess(imgs):
+    imgs = imgs.astype("float32") / 255.0
+    imgs = np.pad(imgs, ((0, 0), (2, 2), (2, 2)), constant_values=0.0)
+    imgs = np.expand_dims(imgs, -1)
+    return imgs
+
+x_train = preprocess(x_train)
+x_test = preprocess(x_test)
+
+# Show some items of clothing from the training set
+display(x_train)
+
+
+
+3. Define the Encoder
+This section defines the encoder part of the autoencoder, which compresses the input image into a lower-dimensional embedding.
+
+# Encoder
+encoder_input = layers.Input(shape=(IMAGE_SIZE, IMAGE_SIZE, CHANNELS), name="encoder_input")
+x = layers.Conv2D(32, (3, 3), strides=2, activation="relu", padding="same")(encoder_input)
+x = layers.Conv2D(64, (3, 3), strides=2, activation="relu", padding="same")(x)
+x = layers.Conv2D(128, (3, 3), strides=2, activation="relu", padding="same")(x)
+shape_before_flattening = K.int_shape(x)[1:]  # the decoder will need this!
+x = layers.Flatten()(x)
+encoder_output = layers.Dense(EMBEDDING_DIM, name="encoder_output")(x)
+encoder = models.Model(encoder_input, encoder_output)
+encoder.summary()
+
+
+
+4. Define the Decoder
+This section defines the decoder part of the autoencoder, which reconstructs the original image from the lower-dimensional embedding.
+# Decoder
+decoder_input = layers.Input(shape=(EMBEDDING_DIM,), name="decoder_input")
+x = layers.Dense(np.prod(shape_before_flattening))(decoder_input)
+x = layers.Reshape(shape_before_flattening)(x)
+x = layers.Conv2DTranspose(128, (3, 3), strides=2, activation="relu", padding="same")(x)
+x = layers.Conv2DTranspose(64, (3, 3), strides=2, activation="relu", padding="same")(x)
+x = layers.Conv2DTranspose(32, (3, 3), strides=2, activation="relu", padding="same")(x)
+decoder_output = layers.Conv2D(CHANNELS, (3, 3), strides=1, activation="sigmoid", padding="same", name="decoder_output")(x)
+decoder = models.Model(decoder_input, decoder_output)
+decoder.summary()
+
+
+
+5. Define and Compile the Autoencoder
+This section combines the encoder and decoder into a single autoencoder model and compiles it.
+# Autoencoder
+autoencoder = models.Model(encoder_input, decoder(encoder_output))
+autoencoder.summary()
+
+# Compile the autoencoder
+autoencoder.compile(optimizer="adam", loss="binary_crossentropy")
+
+
+
+6. Set Up Callbacks and Train the Autoencoder
+This section sets up callbacks for saving the model and logging, then trains the autoencoder using the training data.
+
+# Create a model save checkpoint
+model_checkpoint_callback = callbacks.ModelCheckpoint(
+    filepath="D:/Bobby Data/Fashion mnist Autoencoder",
+    save_weights_only=False,
+    save_freq="epoch",
+    monitor="loss",
+    mode="min",
+    save_best_only=True,
+    verbose=0,
+)
+tensorboard_callback = callbacks.TensorBoard(log_dir="./logs")
+autoencoder.fit(
+    x_train,
+    x_train,
+    epochs=EPOCHS,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    validation_data=(x_test, x_test),
+    callbacks=[model_checkpoint_callback, tensorboard_callback],
+)
+
+
+
+7. Make Predictions and Visualize Results
+This section uses the trained autoencoder to make predictions on the test set and visualize the original and reconstructed images.
+
+n_to_predict = 5000
+example_images = x_test[:n_to_predict]
+example_labels = y_test[:n_to_predict]
+predictions = autoencoder.predict(example_images)
+
+print("Example real clothing items")
+display(example_images)
+print("Reconstructions")
+display(predictions)
+
+
+
+8. Visualize Embeddings
+This section encodes the test images, visualizes the embeddings in 2D space, and colors them based on their labels.
+
+# Encode the example images
+embeddings = encoder.predict(example_images)
+# Some examples of the embeddings
+print(embeddings[:10])
+
+# Show the encoded points in 2D space
+figsize = 8
+plt.figure(figsize=(figsize, figsize))
+plt.scatter(embeddings[:, 0], embeddings[:, 1], c="black", alpha=0.5, s=3)
+plt.show()
+# Colour the embeddings by their label (clothing type - see table)
+figsize = 8
+plt.figure(figsize=(figsize, figsize))
+plt.scatter(embeddings[:, 0], embeddings[:, 1], cmap="rainbow", c=example_labels, alpha=0.8, s=3)
+plt.colorbar()
+plt.show()
+
+
+
+9. Sample Points in Latent Space and Visualize Reconstructions
+This section samples points in the latent space, decodes them, and visualizes the newly generated images.
+
+# Get the range of the existing embeddings
+mins, maxs = np.min(embeddings, axis=0), np.max(embeddings, axis=0)
+# Sample some points in the latent space
+grid_width, grid_height = (6, 3)
+sample = np.random.uniform(mins, maxs, size=(grid_width * grid_height, EMBEDDING_DIM))
+# Decode the sampled points
+reconstructions = decoder.predict(sample)
+figsize = 8
+plt.figure(figsize=(figsize, figsize))
+# ... the original embeddings ...
+plt.scatter(embeddings[:, 0], embeddings[:, 1], c="black", alpha=0.5, s=2)
+# ... and the newly generated points in the latent space
+plt.scatter(sample[:, 0], sample[:, 1], c="#00B0F0", alpha=1, s=40)
+plt.show()
+# Add underneath a grid of the decoded images
+fig = plt.figure(figsize=(figsize, grid_height * 2))
+fig.subplots_adjust(hspace=0.4, wspace=0.4)
+for i in range(grid_width * grid_height):
+    ax = fig.add_subplot(grid_height, grid_width, i + 1)
+    ax.axis("off")
+    ax.text(0.5, -0.35, str(np.round(sample[i, :], 1)), fontsize=10, ha="center", transform=ax.transAxes)
+    ax.imshow(reconstructions[i, :, :], cmap="Greys")
+
+
+
+10. Visualize Embeddings with Grid
+This section creates a grid of points in the latent space and visualizes the corresponding decoded images.
+
+# Colour the embeddings by their label (clothing type - see table)
+figsize = 12
+grid_size = 15
+plt.figure(figsize=(figsize, figsize))
+plt.scatter(embeddings[:, 0], embeddings[:, 1], cmap="rainbow", c=example_labels, alpha=0.8, s=300)
+plt.colorbar()
+
+x = np.linspace(min(embeddings[:, 0]), max(embeddings[:, 0]), grid_size)
+y = np.linspace(max(embeddings[:, 1]), min(embeddings[:, 1]), grid_size)
+xv, yv = np.meshgrid(x, y)
+xv = xv.flatten()
+yv = yv.flatten()
+grid = np.array(list(zip(xv, yv)))
+reconstructions = decoder.predict(grid)
+plt.show()
+
+fig = plt.figure(figsize=(figsize, figsize))
+fig.subplots_adjust(hspace=0.4, wspace=0.4)
+for i in range(grid_size**2):
+    ax = fig.add_subplot(grid_size, grid_size, i + 1)
+    ax.axis("off")
+    ax.imshow(reconstructions[i, :, :], cmap="Greys")
+
